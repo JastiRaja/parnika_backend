@@ -7,7 +7,6 @@ import multer from 'multer';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
-import { GridFsStorage } from 'multer-gridfs-storage';
 import { ObjectId, GridFSBucket } from 'mongodb';
 import mongoose from 'mongoose';
 
@@ -17,14 +16,8 @@ const __dirname = path.dirname(__filename);
 
 // Configure GridFS storage for multer
 const mongoURI = process.env.MONGODB_URI || 'mongodb://localhost:27017/parnika_silks';
-const storage = new GridFsStorage({
-  url: mongoURI,
-  file: (req, file) => ({
-    filename: `product_${Date.now()}_${file.originalname}`,
-    bucketName: 'uploads'
-  })
-});
-const upload = multer({ storage });
+// const storage = new GridFSBucket(mongoose.connection.db, { bucketName: 'uploads' });
+const upload = multer();
 
 // Middleware to check if user is admin
 const isAdmin = async (req, res, next) => {
@@ -129,6 +122,23 @@ router.get('/users', isAdmin, async (req, res) => {
 // Create product
 router.post('/products', isAdmin, upload.array('images', 5), async (req, res) => {
   try {
+    const db = mongoose.connection.db;
+    const bucket = new GridFSBucket(db, { bucketName: 'uploads' });
+    // Save each uploaded file to GridFS and collect their IDs
+    const imageIds = [];
+    for (const file of req.files) {
+      const uploadStream = bucket.openUploadStream(file.originalname, {
+        contentType: file.mimetype,
+      });
+      uploadStream.end(file.buffer);
+      await new Promise((resolve, reject) => {
+        uploadStream.on('finish', () => {
+          imageIds.push(uploadStream.id);
+          resolve();
+        });
+        uploadStream.on('error', reject);
+      });
+    }
     const { name, description, price, category, stock, specifications } = req.body;
     if (!name || !description || !price || !category) {
       return res.status(400).json({ success: false, message: 'All required fields must be provided' });
@@ -149,8 +159,6 @@ router.post('/products', isAdmin, upload.array('images', 5), async (req, res) =>
       material: parsedSpecifications.material || 'Not specified',
       color: parsedSpecifications.color || 'Not specified'
     };
-    // Store GridFS file IDs
-    const images = req.files.map(file => file.id);
     const product = new Product({
       name,
       description,
@@ -158,7 +166,7 @@ router.post('/products', isAdmin, upload.array('images', 5), async (req, res) =>
       category,
       stock: parseInt(stock) || 0,
       specifications: finalSpecifications,
-      images
+      images: imageIds
     });
     console.log('Creating product with specifications:', finalSpecifications);
     const savedProduct = await product.save();
@@ -176,13 +184,28 @@ router.post('/products', isAdmin, upload.array('images', 5), async (req, res) =>
 // Update product
 router.put('/products/:id', isAdmin, upload.array('images', 5), async (req, res) => {
   try {
-    const { name, description, price, category, stock, specifications } = req.body;
-    
+    const db = mongoose.connection.db;
+    const bucket = new GridFSBucket(db, { bucketName: 'uploads' });
     const product = await Product.findById(req.params.id);
     if (!product) {
       return res.status(404).json({ success: false, message: 'Product not found' });
     }
-
+    // Save each newly uploaded file to GridFS and collect their IDs
+    const newImageIds = [];
+    for (const file of req.files) {
+      const uploadStream = bucket.openUploadStream(file.originalname, {
+        contentType: file.mimetype,
+      });
+      uploadStream.end(file.buffer);
+      await new Promise((resolve, reject) => {
+        uploadStream.on('finish', () => {
+          newImageIds.push(uploadStream.id);
+          resolve();
+        });
+        uploadStream.on('error', reject);
+      });
+    }
+    const { name, description, price, category, stock, specifications } = req.body;
     // Parse specifications from JSON string
     let parsedSpecifications;
     try {
@@ -194,15 +217,11 @@ router.put('/products/:id', isAdmin, upload.array('images', 5), async (req, res)
         color: product.specifications?.color || 'Not specified'
       };
     }
-
     // Ensure specifications has required fields
     const finalSpecifications = {
       material: parsedSpecifications.material || product.specifications?.material || 'Not specified',
       color: parsedSpecifications.color || product.specifications?.color || 'Not specified'
     };
-
-    // Process new image IDs for new uploads
-    const newImageIds = req.files.map(file => file.id);
     // Update product fields
     if (name) product.name = name;
     if (description) product.description = description;
@@ -238,8 +257,9 @@ router.delete('/products/:id', isAdmin, async (req, res) => {
     if (product.images && product.images.length > 0) {
       for (const imageId of product.images) {
         try {
-          await gfs.files.deleteOne({ _id: imageId });
-          await gfs.db.collection('uploads.chunks').deleteMany({ files_id: imageId });
+          const db = mongoose.connection.db;
+          const bucket = new GridFSBucket(db, { bucketName: 'uploads' });
+          await bucket.delete(new ObjectId(imageId));
         } catch (err) {
           console.error('Error deleting image from GridFS:', err);
         }
@@ -262,6 +282,9 @@ router.delete('/products/:id', isAdmin, async (req, res) => {
 // Serve images from GridFS using native GridFSBucket
 router.get('/images/:id', async (req, res) => {
   try {
+    if (!ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ message: 'Invalid image ID' });
+    }
     const db = mongoose.connection.db;
     const bucket = new GridFSBucket(db, { bucketName: 'uploads' });
     const _id = new ObjectId(req.params.id);
