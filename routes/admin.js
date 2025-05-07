@@ -7,26 +7,24 @@ import multer from 'multer';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
+import { GridFsStorage } from 'multer-gridfs-storage';
+import { ObjectId, GridFSBucket } from 'mongodb';
+import mongoose from 'mongoose';
 
 const router = express.Router();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Configure multer for file uploads
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    const uploadDir = 'uploads/products';
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true });
-    }
-    cb(null, uploadDir);
-  },
-  filename: function (req, file, cb) {
-    cb(null, Date.now() + path.extname(file.originalname));
-  }
+// Configure GridFS storage for multer
+const mongoURI = process.env.MONGODB_URI || 'mongodb://localhost:27017/parnika_silks';
+const storage = new GridFsStorage({
+  url: mongoURI,
+  file: (req, file) => ({
+    filename: `product_${Date.now()}_${file.originalname}`,
+    bucketName: 'uploads'
+  })
 });
-
-const upload = multer({ storage: storage });
+const upload = multer({ storage });
 
 // Middleware to check if user is admin
 const isAdmin = async (req, res, next) => {
@@ -132,11 +130,9 @@ router.get('/users', isAdmin, async (req, res) => {
 router.post('/products', isAdmin, upload.array('images', 5), async (req, res) => {
   try {
     const { name, description, price, category, stock, specifications } = req.body;
-    
     if (!name || !description || !price || !category) {
       return res.status(400).json({ success: false, message: 'All required fields must be provided' });
     }
-
     // Parse specifications from JSON string
     let parsedSpecifications;
     try {
@@ -148,16 +144,13 @@ router.post('/products', isAdmin, upload.array('images', 5), async (req, res) =>
         color: 'Not specified'
       };
     }
-
     // Ensure specifications has required fields
     const finalSpecifications = {
       material: parsedSpecifications.material || 'Not specified',
       color: parsedSpecifications.color || 'Not specified'
     };
-
-    // Process image paths
-    const images = req.files.map(file => '/uploads/products/' + file.filename);
-    
+    // Store GridFS file IDs
+    const images = req.files.map(file => file.id);
     const product = new Product({
       name,
       description,
@@ -167,11 +160,8 @@ router.post('/products', isAdmin, upload.array('images', 5), async (req, res) =>
       specifications: finalSpecifications,
       images
     });
-
     console.log('Creating product with specifications:', finalSpecifications);
-
     const savedProduct = await product.save();
-    
     res.status(201).json({
       success: true,
       message: 'Product created successfully',
@@ -211,9 +201,8 @@ router.put('/products/:id', isAdmin, upload.array('images', 5), async (req, res)
       color: parsedSpecifications.color || product.specifications?.color || 'Not specified'
     };
 
-    // Process image paths for new images
-    const newImages = req.files.map(file => '/uploads/products/' + file.filename);
-    
+    // Process new image IDs for new uploads
+    const newImageIds = req.files.map(file => file.id);
     // Update product fields
     if (name) product.name = name;
     if (description) product.description = description;
@@ -221,16 +210,12 @@ router.put('/products/:id', isAdmin, upload.array('images', 5), async (req, res)
     if (category) product.category = category;
     if (stock) product.stock = parseInt(stock) || 0;
     product.specifications = finalSpecifications;
-
     // Add new images if any
-    if (newImages.length > 0) {
-      product.images = [...product.images, ...newImages];
+    if (newImageIds.length > 0) {
+      product.images = [...product.images, ...newImageIds];
     }
-
     console.log('Updating product with specifications:', finalSpecifications);
-
     const updatedProduct = await product.save();
-    
     res.json({
       success: true,
       message: 'Product updated successfully',
@@ -249,17 +234,18 @@ router.delete('/products/:id', isAdmin, async (req, res) => {
     if (!product) {
       return res.status(404).json({ success: false, message: 'Product not found' });
     }
-
-    // Delete product images from filesystem
-    product.images.forEach(imagePath => {
-      const fullPath = path.join(__dirname, '..', imagePath);
-      if (fs.existsSync(fullPath)) {
-        fs.unlinkSync(fullPath);
+    // Delete product images from GridFS
+    if (product.images && product.images.length > 0) {
+      for (const imageId of product.images) {
+        try {
+          await gfs.files.deleteOne({ _id: imageId });
+          await gfs.db.collection('uploads.chunks').deleteMany({ files_id: imageId });
+        } catch (err) {
+          console.error('Error deleting image from GridFS:', err);
+        }
       }
-    });
-
+    }
     await Product.findByIdAndDelete(req.params.id);
-    
     res.json({ 
       success: true, 
       message: 'Product deleted successfully'
@@ -270,6 +256,22 @@ router.delete('/products/:id', isAdmin, async (req, res) => {
       success: false, 
       message: error.message || 'Error deleting product'
     });
+  }
+});
+
+// Serve images from GridFS using native GridFSBucket
+router.get('/images/:id', async (req, res) => {
+  try {
+    const db = mongoose.connection.db;
+    const bucket = new GridFSBucket(db, { bucketName: 'uploads' });
+    const _id = new ObjectId(req.params.id);
+    const files = await db.collection('uploads.files').findOne({ _id });
+    if (!files) return res.status(404).json({ message: 'File not found' });
+    res.set('Content-Type', files.contentType);
+    const downloadStream = bucket.openDownloadStream(_id);
+    downloadStream.pipe(res);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
   }
 });
 

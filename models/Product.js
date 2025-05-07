@@ -43,8 +43,9 @@ const productSchema = new mongoose.Schema({
     enum: ['saree', 'dress', 'lehenga', 'salwar', 'other']
   },
   images: [{
-    type: String,
-    required: [true, 'At least one image is required']
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'uploads.files', // GridFS files collection
+    required: false
   }],
   stock: {
     type: Number,
