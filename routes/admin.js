@@ -231,7 +231,7 @@ router.put('/products/:id', isAdmin, upload.array('images', 5), async (req, res)
     product.specifications = finalSpecifications;
     // Add new images if any
     if (newImageIds.length > 0) {
-      product.images = [...product.images, ...newImageIds];
+      product.images = [...(product.images || []), ...newImageIds];
     }
     console.log('Updating product with specifications:', finalSpecifications);
     const updatedProduct = await product.save();
@@ -295,6 +295,41 @@ router.get('/images/:id', async (req, res) => {
     downloadStream.pipe(res);
   } catch (err) {
     res.status(500).json({ message: err.message });
+  }
+});
+
+// Save payment details for an order
+router.post('/orders/:orderId/payment-details', async (req, res) => {
+  try {
+    const { paymentDate, amount, transactionId } = req.body;
+    const order = await Order.findById(req.params.orderId);
+    if (!order) return res.status(404).json({ message: 'Order not found' });
+
+    order.paymentDetails = {
+      paymentDate,
+      amount,
+      transactionId,
+      verified: false
+    };
+    await order.save();
+    res.json({ success: true, order });
+  } catch (error) {
+    res.status(500).json({ message: 'Error saving payment details' });
+  }
+});
+
+// Admin verifies payment
+router.post('/orders/:orderId/verify-payment', async (req, res) => {
+  try {
+    const order = await Order.findById(req.params.orderId);
+    if (!order) return res.status(404).json({ message: 'Order not found' });
+
+    order.paymentDetails.verified = true;
+    order.status = 'processing'; // or 'confirmed'
+    await order.save();
+    res.json({ success: true, order });
+  } catch (error) {
+    res.status(500).json({ message: 'Error verifying payment' });
   }
 });
 

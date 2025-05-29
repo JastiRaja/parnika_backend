@@ -73,6 +73,12 @@ const orderSchema = new mongoose.Schema({
     enum: ['pending', 'completed', 'failed', 'refunded'],
     default: 'pending'
   },
+  paymentDetails: {
+    paymentDate: Date,
+    amount: Number,
+    transactionId: String,
+    verified: { type: Boolean, default: false }
+  },
   trackingNumber: {
     type: String,
     sparse: true, // This allows multiple documents with null values
