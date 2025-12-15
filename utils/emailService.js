@@ -7,12 +7,30 @@ const SENDER_EMAIL = process.env.SENDER_EMAIL;
 const SENDER_NAME = 'Parnika Silks';
 
 export const sendEmail = async ({ to, subject, html }) => {
+  // Validate required environment variables
   if (!process.env.BREVO_API_KEY) {
-    console.warn('Brevo API key is not configured, skipping email sending');
-    return { success: false, message: 'Email service not configured' };
+    console.error('❌ BREVO_API_KEY is not configured in environment variables');
+    console.error('Please add BREVO_API_KEY to your .env file');
+    return { success: false, message: 'Email service not configured: BREVO_API_KEY missing' };
+  }
+
+  if (!SENDER_EMAIL) {
+    console.error('❌ SENDER_EMAIL is not configured in environment variables');
+    console.error('Please add SENDER_EMAIL to your .env file');
+    return { success: false, message: 'Email service not configured: SENDER_EMAIL missing' };
+  }
+
+  // Validate recipient email
+  if (!to) {
+    console.error('❌ Recipient email (to) is required');
+    return { success: false, message: 'Recipient email is required' };
   }
 
   try {
+    console.log(`📧 Attempting to send email to: ${to}`);
+    console.log(`📧 From: ${SENDER_EMAIL}`);
+    console.log(`📧 Subject: ${subject}`);
+
     const response = await axios.post(
       'https://api.brevo.com/v3/smtp/email',
       {
@@ -26,12 +44,42 @@ export const sendEmail = async ({ to, subject, html }) => {
           'api-key': process.env.BREVO_API_KEY,
           'Content-Type': 'application/json',
         },
+        timeout: 10000 // 10 second timeout
       }
     );
+    
+    console.log('✅ Email sent successfully:', response.data);
     return { success: true, data: response.data };
   } catch (error) {
-    console.error('Error sending email via Brevo API:', error.response?.data || error.message);
-    return { success: false, error: error.message };
+    console.error('❌ Error sending email via Brevo API:');
+    console.error('Error details:', {
+      message: error.message,
+      status: error.response?.status,
+      statusText: error.response?.statusText,
+      data: error.response?.data,
+      config: {
+        url: error.config?.url,
+        method: error.config?.method
+      }
+    });
+
+    // Provide more specific error messages
+    let errorMessage = 'Failed to send email';
+    if (error.response?.status === 401) {
+      errorMessage = 'Invalid Brevo API key. Please check BREVO_API_KEY in .env file';
+    } else if (error.response?.status === 400) {
+      errorMessage = `Invalid email request: ${JSON.stringify(error.response?.data)}`;
+    } else if (error.response?.status === 402) {
+      errorMessage = 'Brevo account limit reached or payment required';
+    } else if (error.code === 'ECONNABORTED') {
+      errorMessage = 'Email service timeout. Please try again later';
+    } else if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
+      errorMessage = 'Cannot connect to Brevo email service. Check your internet connection';
+    } else {
+      errorMessage = error.response?.data?.message || error.message || 'Unknown error occurred';
+    }
+
+    return { success: false, error: errorMessage, details: error.response?.data };
   }
 };
 

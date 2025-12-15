@@ -6,6 +6,7 @@ import { auth } from '../middleware/auth.js';
 import { sendEmail, emailTemplates } from '../utils/emailService.js';
 import crypto from 'crypto';
 import axios from 'axios';
+import { body, validationResult } from 'express-validator';
 
 const router = express.Router();
 
@@ -46,12 +47,39 @@ router.get('/me', auth, async (req, res) => {
 });
 
 // Update user profile
-router.put('/update', auth, async (req, res) => {
+router.put('/update', auth, [
+  body('name')
+    .optional()
+    .trim()
+    .escape()
+    .isLength({ min: 2, max: 50 })
+    .withMessage('Name must be between 2 and 50 characters'),
+  body('email')
+    .optional()
+    .trim()
+    .normalizeEmail()
+    .isEmail()
+    .withMessage('Please provide a valid email address'),
+  body('phone')
+    .optional()
+    .trim()
+    .matches(/^[0-9]{10}$/)
+    .withMessage('Phone must be exactly 10 digits')
+], async (req, res) => {
   try {
+    // Check for validation errors
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ 
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
     const { name, email, phone } = req.body;
 
     // Check if email is already in use
-    if (email !== req.user.email) {
+    if (email && email !== req.user.email) {
       const existingUser = await User.findOne({ email });
       if (existingUser) {
         return res.status(400).json({ message: 'Email already in use' });
@@ -76,9 +104,20 @@ router.put('/change-password', auth, async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
 
-    // Validate new password
-    if (!newPassword || newPassword.length < 6) {
-      return res.status(400).json({ message: 'New password must be at least 6 characters long' });
+    // Validate new password strength
+    if (!newPassword || newPassword.length < 8) {
+      return res.status(400).json({ message: 'New password must be at least 8 characters long' });
+    }
+    
+    // Check password complexity
+    const hasUpperCase = /[A-Z]/.test(newPassword);
+    const hasLowerCase = /[a-z]/.test(newPassword);
+    const hasNumber = /[0-9]/.test(newPassword);
+    
+    if (!hasUpperCase || !hasLowerCase || !hasNumber) {
+      return res.status(400).json({ 
+        message: 'Password must contain at least one uppercase letter, one lowercase letter, and one number' 
+      });
     }
 
     // Find user and validate current password

@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import Product from '../models/Product.js';
 import { auth, adminAuth } from '../middleware/auth.js';
 import fs from 'fs';
+import mongoose from 'mongoose';
 
 const router = express.Router();
 const __filename = fileURLToPath(import.meta.url);
@@ -35,22 +36,48 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage: storage });
 
-// Get all products
+// Get all products with pagination and filtering
 router.get('/', async (req, res) => {
   try {
-    const { category, sort, search } = req.query;
+    // Check MongoDB connection before querying
+    if (mongoose.connection.readyState !== 1) {
+      const connectionStates = {
+        0: 'disconnected',
+        1: 'connected',
+        2: 'connecting',
+        3: 'disconnecting'
+      };
+      const stateName = connectionStates[mongoose.connection.readyState] || 'unknown';
+      console.error(`MongoDB not connected. Connection state: ${mongoose.connection.readyState} (${stateName})`);
+      return res.status(503).json({ 
+        success: false, 
+        message: 'Database connection unavailable. Please check the server connection and try again.',
+        connectionState: mongoose.connection.readyState,
+        connectionStateName: stateName,
+        hint: 'Check server logs for MongoDB connection errors. Common issues: IP whitelist, incorrect MONGODB_URI, or network problems.'
+      });
+    }
+
+    const { category, sort, search, page = 1, limit = 12, sortBy, sortOrder } = req.query;
     let query = {};
 
-    if (category) {
+    // Build query
+    if (category && category !== 'all') {
       query.category = category;
     }
 
     if (search) {
-      query.name = { $regex: search, $options: 'i' };
+      query.$or = [
+        { name: { $regex: search, $options: 'i' } },
+        { description: { $regex: search, $options: 'i' } }
+      ];
     }
 
+    // Build sort options
     let sortOption = {};
-    if (sort === 'price_asc') {
+    if (sortBy && sortOrder) {
+      sortOption[sortBy] = sortOrder === 'asc' ? 1 : -1;
+    } else if (sort === 'price_asc') {
       sortOption = { price: 1 };
     } else if (sort === 'price_desc') {
       sortOption = { price: -1 };
@@ -58,10 +85,51 @@ router.get('/', async (req, res) => {
       sortOption = { createdAt: -1 };
     }
 
-    const products = await Product.find(query).sort(sortOption);
-    res.json({ success: true, products });
+    // Pagination
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const skip = (pageNum - 1) * limitNum;
+
+    // Execute query with pagination - optimized
+    const queryPromise = Product.find(query)
+      .sort(sortOption)
+      .skip(skip)
+      .limit(limitNum)
+      .select('-__v -reviews') // Exclude reviews to reduce payload size
+      .lean(); // Use lean() for better performance
+    
+    const countPromise = Product.countDocuments(query);
+    
+    // Execute both queries in parallel with timeout protection
+    const [products, total] = await Promise.all([
+      queryPromise,
+      countPromise
+    ]);
+
+    res.json({ 
+      success: true, 
+      products: products || [],
+      total: total || 0,
+      page: pageNum,
+      totalPages: Math.ceil((total || 0) / limitNum)
+    });
   } catch (error) {
-    res.status(500).json({ success: false, message: 'Error fetching products' });
+    console.error('Error fetching products:', error);
+    
+    // Check if it's a timeout or connection error
+    if ((error.message && error.message.includes('timeout')) || error.name === 'MongoNetworkError' || error.name === 'MongoServerSelectionError') {
+      return res.status(504).json({ 
+        success: false, 
+        message: 'Database connection timeout. Please check your connection and try again.',
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
+    }
+    
+    res.status(500).json({ 
+      success: false, 
+      message: 'Error fetching products',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 });
 

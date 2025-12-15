@@ -15,9 +15,34 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Configure GridFS storage for multer
-const mongoURI = process.env.MONGODB_URI || 'mongodb://localhost:27017/parnika_silks';
-// const storage = new GridFSBucket(mongoose.connection.db, { bucketName: 'uploads' });
-const upload = multer();
+// Note: MongoDB URI should always come from environment variables in production
+if (!process.env.MONGODB_URI) {
+  console.error('❌ MONGODB_URI is not set in environment variables');
+}
+
+// File upload security configuration
+const allowedMimeTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+const maxFileSize = 5 * 1024 * 1024; // 5MB
+const maxFiles = 5;
+
+// File filter function
+const fileFilter = (req, file, cb) => {
+  // Check MIME type
+  if (allowedMimeTypes.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(new Error(`Invalid file type. Only ${allowedMimeTypes.join(', ')} are allowed.`), false);
+  }
+};
+
+// Configure multer with security settings
+const upload = multer({
+  limits: {
+    fileSize: maxFileSize,
+    files: maxFiles
+  },
+  fileFilter: fileFilter
+});
 
 // Middleware to check if user is admin
 const isAdmin = async (req, res, next) => {
@@ -122,22 +147,72 @@ router.get('/users', isAdmin, async (req, res) => {
 // Create product
 router.post('/products', isAdmin, upload.array('images', 5), async (req, res) => {
   try {
+    // Check if MongoDB is connected
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({ success: false, message: 'Database connection not available. Please try again.' });
+    }
+
     const db = mongoose.connection.db;
+    if (!db) {
+      return res.status(503).json({ success: false, message: 'Database not initialized' });
+    }
+
+    // Validate files
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ success: false, message: 'At least one image is required' });
+    }
+
+    // Check file count
+    if (req.files.length > maxFiles) {
+      return res.status(400).json({ success: false, message: `Maximum ${maxFiles} files allowed` });
+    }
+
+    // Validate each file
+    for (const file of req.files) {
+      // Check file size
+      if (file.size > maxFileSize) {
+        return res.status(400).json({ success: false, message: `File ${file.originalname} exceeds maximum size of ${maxFileSize / 1024 / 1024}MB` });
+      }
+      
+      // Check MIME type
+      if (!allowedMimeTypes.includes(file.mimetype)) {
+        return res.status(400).json({ success: false, message: `File ${file.originalname} has invalid type. Only images are allowed.` });
+      }
+    }
+
     const bucket = new GridFSBucket(db, { bucketName: 'uploads' });
     // Save each uploaded file to GridFS and collect their IDs
     const imageIds = [];
     for (const file of req.files) {
-      const uploadStream = bucket.openUploadStream(file.originalname, {
-        contentType: file.mimetype,
-      });
-      uploadStream.end(file.buffer);
-      await new Promise((resolve, reject) => {
-        uploadStream.on('finish', () => {
-          imageIds.push(uploadStream.id);
-          resolve();
+      try {
+        // Sanitize filename to prevent path traversal
+        const sanitizedFilename = file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_');
+        const timestamp = Date.now();
+        const finalFilename = `${timestamp}_${sanitizedFilename}`;
+        
+        const uploadStream = bucket.openUploadStream(finalFilename, {
+          contentType: file.mimetype,
         });
-        uploadStream.on('error', reject);
-      });
+        uploadStream.end(file.buffer);
+        await new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            reject(new Error('Image upload timeout'));
+          }, 30000); // 30 second timeout
+
+          uploadStream.on('finish', () => {
+            clearTimeout(timeout);
+            imageIds.push(uploadStream.id);
+            resolve();
+          });
+          uploadStream.on('error', (err) => {
+            clearTimeout(timeout);
+            reject(err);
+          });
+        });
+      } catch (fileError) {
+        console.error('Error uploading file:', fileError);
+        throw new Error(`Failed to upload image: ${fileError.message}`);
+      }
     }
     const { name, description, price, category, stock, specifications } = req.body;
     if (!name || !description || !price || !category) {
@@ -184,26 +259,49 @@ router.post('/products', isAdmin, upload.array('images', 5), async (req, res) =>
 // Update product
 router.put('/products/:id', isAdmin, upload.array('images', 5), async (req, res) => {
   try {
-    const db = mongoose.connection.db;
-    const bucket = new GridFSBucket(db, { bucketName: 'uploads' });
+    // Check if MongoDB is connected
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({ success: false, message: 'Database connection not available. Please try again.' });
+    }
+
     const product = await Product.findById(req.params.id);
     if (!product) {
       return res.status(404).json({ success: false, message: 'Product not found' });
     }
+
+    const db = mongoose.connection.db;
+    if (!db) {
+      return res.status(503).json({ success: false, message: 'Database not initialized' });
+    }
+
+    const bucket = new GridFSBucket(db, { bucketName: 'uploads' });
     // Save each newly uploaded file to GridFS and collect their IDs
     const newImageIds = [];
     for (const file of req.files) {
-      const uploadStream = bucket.openUploadStream(file.originalname, {
-        contentType: file.mimetype,
-      });
-      uploadStream.end(file.buffer);
-      await new Promise((resolve, reject) => {
-        uploadStream.on('finish', () => {
-          newImageIds.push(uploadStream.id);
-          resolve();
+      try {
+        const uploadStream = bucket.openUploadStream(file.originalname, {
+          contentType: file.mimetype,
         });
-        uploadStream.on('error', reject);
-      });
+        uploadStream.end(file.buffer);
+        await new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            reject(new Error('Image upload timeout'));
+          }, 30000); // 30 second timeout
+
+          uploadStream.on('finish', () => {
+            clearTimeout(timeout);
+            newImageIds.push(uploadStream.id);
+            resolve();
+          });
+          uploadStream.on('error', (err) => {
+            clearTimeout(timeout);
+            reject(err);
+          });
+        });
+      } catch (fileError) {
+        console.error('Error uploading file:', fileError);
+        throw new Error(`Failed to upload image: ${fileError.message}`);
+      }
     }
     const { name, description, price, category, stock, specifications } = req.body;
     // Parse specifications from JSON string
@@ -285,16 +383,42 @@ router.get('/images/:id', async (req, res) => {
     if (!ObjectId.isValid(req.params.id)) {
       return res.status(400).json({ message: 'Invalid image ID' });
     }
+
+    // Check if MongoDB is connected
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({ message: 'Database connection not available' });
+    }
+
     const db = mongoose.connection.db;
+    if (!db) {
+      return res.status(503).json({ message: 'Database not initialized' });
+    }
+
     const bucket = new GridFSBucket(db, { bucketName: 'uploads' });
     const _id = new ObjectId(req.params.id);
+    
     const files = await db.collection('uploads.files').findOne({ _id });
-    if (!files) return res.status(404).json({ message: 'File not found' });
+    if (!files) {
+      return res.status(404).json({ message: 'File not found' });
+    }
+
     res.set('Content-Type', files.contentType);
     const downloadStream = bucket.openDownloadStream(_id);
+    
+    // Handle stream errors
+    downloadStream.on('error', (err) => {
+      console.error('GridFS download stream error:', err);
+      if (!res.headersSent) {
+        res.status(500).json({ message: 'Error streaming file', error: err.message });
+      }
+    });
+
     downloadStream.pipe(res);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    console.error('Error serving image:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ message: err.message || 'Error serving image' });
+    }
   }
 });
 

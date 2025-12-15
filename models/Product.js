@@ -81,8 +81,16 @@ const productSchema = new mongoose.Schema({
     default: Date.now
   }
 }, {
-  collection: 'products' // Explicitly set collection name
+  collection: 'products', // Explicitly set collection name
+  timestamps: true
 });
+
+// Add indexes for better query performance
+productSchema.index({ category: 1, createdAt: -1 });
+productSchema.index({ name: 'text', description: 'text' }); // Text search index
+productSchema.index({ price: 1 });
+productSchema.index({ createdAt: -1 });
+productSchema.index({ isActive: 1 });
 
 // Calculate average rating when a review is added
 productSchema.methods.calculateAverageRating = function() {

@@ -27,6 +27,7 @@ Thumbs.db
 # Logs
 logs/
 *.log
+*.md
 
 # Coverage directory used by tools like istanbul
 coverage/

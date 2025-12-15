@@ -84,6 +84,14 @@ const orderSchema = new mongoose.Schema({
     sparse: true, // This allows multiple documents with null values
     unique: true  // This ensures uniqueness for non-null values
   },
+  expectedDeliveryDate: {
+    type: Date,
+    default: null
+  },
+  courierService: {
+    type: String,
+    default: null
+  },
   createdAt: {
     type: Date,
     default: Date.now
