@@ -37,6 +37,34 @@ const productSchema = new mongoose.Schema({
     required: [true, 'Product price is required'],
     min: [0, 'Price cannot be negative']
   },
+  originalPrice: {
+    type: Number,
+    required: false,
+    min: [0, 'Original price cannot be negative'],
+    validate: {
+      validator: function(v) {
+        // If originalPrice is set, it should be greater than or equal to price
+        return !v || v >= this.price;
+      },
+      message: 'Original price must be greater than or equal to selling price'
+    }
+  },
+  discountPercentage: {
+    type: Number,
+    required: false,
+    min: [0, 'Discount percentage cannot be negative'],
+    max: [100, 'Discount percentage cannot exceed 100%']
+  },
+  deliveryCharges: {
+    type: Number,
+    required: false,
+    min: [0, 'Delivery charges cannot be negative'],
+    default: 0
+  },
+  deliveryChargesApplicable: {
+    type: Boolean,
+    default: true
+  },
   category: {
     type: String,
     required: [true, 'Product category is required'],

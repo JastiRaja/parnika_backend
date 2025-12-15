@@ -156,12 +156,15 @@ router.post('/', verifyToken, [
       });
     }
 
-    // Calculate total amount
-    const totalAmount = items.reduce((total, item) => {
+    // Calculate subtotal (sum of all items)
+    const subtotal = items.reduce((total, item) => {
       return total + (item.price * item.quantity);
     }, 0);
 
-    // Validate stock before creating order
+    // Validate stock and calculate delivery charges
+    let deliveryCharges = 0;
+    const FREE_DELIVERY_THRESHOLD = 1000;
+    
     for (const item of items) {
       const productId = item._id || item.product;
       if (!productId) {
@@ -185,7 +188,21 @@ router.post('/', verifyToken, [
           message: `Insufficient stock for product: ${product.name}. Available: ${product.stock}, Requested: ${item.quantity}` 
         });
       }
+
+      // Calculate delivery charges for this item (only if delivery charges applicable and order total < threshold)
+      if (subtotal < FREE_DELIVERY_THRESHOLD && product.deliveryChargesApplicable !== false) {
+        const itemDeliveryCharges = (product.deliveryCharges || 0) * item.quantity;
+        deliveryCharges += itemDeliveryCharges;
+      }
     }
+
+    // If order total >= ₹1000, delivery is free
+    if (subtotal >= FREE_DELIVERY_THRESHOLD) {
+      deliveryCharges = 0;
+    }
+
+    // Calculate total amount (subtotal + delivery charges)
+    const totalAmount = subtotal + deliveryCharges;
 
     // Generate a unique tracking number
     const trackingNumber = `TRK${Date.now()}${Math.floor(Math.random() * 1000)}`;
@@ -194,6 +211,8 @@ router.post('/', verifyToken, [
     const order = new Order({
       user: req.user.id,
       items,
+      subtotal,
+      deliveryCharges,
       totalAmount,
       shippingAddress,
       paymentMethod,

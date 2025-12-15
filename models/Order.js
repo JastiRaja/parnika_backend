@@ -28,6 +28,17 @@ const orderSchema = new mongoose.Schema({
     required: [true, 'Total amount is required'],
     min: [0, 'Total amount cannot be negative']
   },
+  deliveryCharges: {
+    type: Number,
+    required: false,
+    min: [0, 'Delivery charges cannot be negative'],
+    default: 0
+  },
+  subtotal: {
+    type: Number,
+    required: false,
+    min: [0, 'Subtotal cannot be negative']
+  },
   status: {
     type: String,
     enum: ['pending', 'processing', 'shipped', 'delivered', 'cancelled'],

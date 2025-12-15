@@ -214,7 +214,7 @@ router.post('/products', isAdmin, upload.array('images', 5), async (req, res) =>
         throw new Error(`Failed to upload image: ${fileError.message}`);
       }
     }
-    const { name, description, price, category, stock, specifications } = req.body;
+    const { name, description, price, originalPrice, discountPercentage, category, stock, deliveryCharges, deliveryChargesApplicable, specifications } = req.body;
     if (!name || !description || !price || !category) {
       return res.status(400).json({ success: false, message: 'All required fields must be provided' });
     }
@@ -234,7 +234,9 @@ router.post('/products', isAdmin, upload.array('images', 5), async (req, res) =>
       material: parsedSpecifications.material || 'Not specified',
       color: parsedSpecifications.color || 'Not specified'
     };
-    const product = new Product({
+    
+    // Prepare product data
+    const productData = {
       name,
       description,
       price: parseFloat(price),
@@ -242,7 +244,28 @@ router.post('/products', isAdmin, upload.array('images', 5), async (req, res) =>
       stock: parseInt(stock) || 0,
       specifications: finalSpecifications,
       images: imageIds
-    });
+    };
+    
+    // Add originalPrice and discountPercentage if provided
+    if (originalPrice && parseFloat(originalPrice) > 0) {
+      productData.originalPrice = parseFloat(originalPrice);
+    }
+    if (discountPercentage !== undefined && discountPercentage !== null) {
+      productData.discountPercentage = parseFloat(discountPercentage);
+    }
+    
+    // Add delivery charges if provided
+    if (deliveryCharges !== undefined && deliveryCharges !== null && deliveryCharges !== '') {
+      const parsedCharges = parseFloat(deliveryCharges);
+      if (!isNaN(parsedCharges)) {
+        productData.deliveryCharges = parsedCharges;
+      }
+    }
+    if (deliveryChargesApplicable !== undefined && deliveryChargesApplicable !== null) {
+      productData.deliveryChargesApplicable = deliveryChargesApplicable === true || deliveryChargesApplicable === 'true';
+    }
+    
+    const product = new Product(productData);
     console.log('Creating product with specifications:', finalSpecifications);
     const savedProduct = await product.save();
     res.status(201).json({
@@ -252,7 +275,16 @@ router.post('/products', isAdmin, upload.array('images', 5), async (req, res) =>
     });
   } catch (error) {
     console.error('Error creating product:', error);
-    res.status(500).json({ success: false, message: error.message || 'Error creating product' });
+    console.error('Error details:', {
+      name: error.name,
+      message: error.message,
+      stack: error.stack
+    });
+    res.status(500).json({ 
+      success: false, 
+      message: error.message || 'Error creating product',
+      error: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 });
 
@@ -275,11 +307,20 @@ router.put('/products/:id', isAdmin, upload.array('images', 5), async (req, res)
     }
 
     const bucket = new GridFSBucket(db, { bucketName: 'uploads' });
+    
+    // Store old image IDs before replacing them
+    const oldImageIds = product.images ? [...product.images] : [];
+    
     // Save each newly uploaded file to GridFS and collect their IDs
     const newImageIds = [];
     for (const file of req.files) {
       try {
-        const uploadStream = bucket.openUploadStream(file.originalname, {
+        // Sanitize filename to prevent path traversal
+        const sanitizedFilename = file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_');
+        const timestamp = Date.now();
+        const finalFilename = `${timestamp}_${sanitizedFilename}`;
+        
+        const uploadStream = bucket.openUploadStream(finalFilename, {
           contentType: file.mimetype,
         });
         uploadStream.end(file.buffer);
@@ -303,7 +344,7 @@ router.put('/products/:id', isAdmin, upload.array('images', 5), async (req, res)
         throw new Error(`Failed to upload image: ${fileError.message}`);
       }
     }
-    const { name, description, price, category, stock, specifications } = req.body;
+    const { name, description, price, originalPrice, discountPercentage, category, stock, deliveryCharges, deliveryChargesApplicable, specifications } = req.body;
     // Parse specifications from JSON string
     let parsedSpecifications;
     try {
@@ -325,12 +366,59 @@ router.put('/products/:id', isAdmin, upload.array('images', 5), async (req, res)
     if (description) product.description = description;
     if (price) product.price = parseFloat(price);
     if (category) product.category = category;
-    if (stock) product.stock = parseInt(stock) || 0;
+    if (stock !== undefined) product.stock = parseInt(stock) || 0;
     product.specifications = finalSpecifications;
-    // Add new images if any
-    if (newImageIds.length > 0) {
-      product.images = [...(product.images || []), ...newImageIds];
+    
+    // Update originalPrice and discountPercentage
+    if (originalPrice !== undefined && originalPrice !== null && originalPrice !== '') {
+      product.originalPrice = parseFloat(originalPrice) > 0 ? parseFloat(originalPrice) : undefined;
+    } else if (originalPrice === '' || originalPrice === null) {
+      // Allow clearing originalPrice by sending empty string or null
+      product.originalPrice = undefined;
     }
+    
+    if (discountPercentage !== undefined && discountPercentage !== null && discountPercentage !== '') {
+      product.discountPercentage = parseFloat(discountPercentage);
+    } else if (discountPercentage === '' || discountPercentage === null) {
+      // Allow clearing discountPercentage
+      product.discountPercentage = undefined;
+    }
+    
+    // Update delivery charges
+    if (deliveryCharges !== undefined && deliveryCharges !== null && deliveryCharges !== '') {
+      const parsedCharges = parseFloat(deliveryCharges);
+      if (!isNaN(parsedCharges)) {
+        product.deliveryCharges = parsedCharges;
+      }
+    } else if (deliveryCharges === '' || deliveryCharges === null) {
+      // Allow clearing delivery charges
+      product.deliveryCharges = 0;
+    }
+    
+    if (deliveryChargesApplicable !== undefined && deliveryChargesApplicable !== null) {
+      product.deliveryChargesApplicable = deliveryChargesApplicable === true || deliveryChargesApplicable === 'true';
+    }
+    
+    // Replace images if new ones are uploaded
+    if (newImageIds.length > 0) {
+      // Delete old images from GridFS
+      if (oldImageIds.length > 0) {
+        for (const oldImageId of oldImageIds) {
+          try {
+            if (oldImageId && ObjectId.isValid(oldImageId)) {
+              await bucket.delete(new ObjectId(oldImageId));
+              console.log(`Deleted old image: ${oldImageId}`);
+            }
+          } catch (deleteError) {
+            console.error(`Error deleting old image ${oldImageId}:`, deleteError);
+            // Continue even if deletion fails - don't block the update
+          }
+        }
+      }
+      // Replace with new images
+      product.images = newImageIds;
+    }
+    
     console.log('Updating product with specifications:', finalSpecifications);
     const updatedProduct = await product.save();
     res.json({
