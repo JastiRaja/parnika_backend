@@ -39,31 +39,12 @@ const productSchema = new mongoose.Schema({
   },
   originalPrice: {
     type: Number,
-    required: false,
-    min: [0, 'Original price cannot be negative'],
-    validate: {
-      validator: function(v) {
-        // If originalPrice is set, it should be greater than or equal to price
-        return !v || v >= this.price;
-      },
-      message: 'Original price must be greater than or equal to selling price'
-    }
+    min: [0, 'Original price cannot be negative']
   },
   discountPercentage: {
     type: Number,
-    required: false,
     min: [0, 'Discount percentage cannot be negative'],
-    max: [100, 'Discount percentage cannot exceed 100%']
-  },
-  deliveryCharges: {
-    type: Number,
-    required: false,
-    min: [0, 'Delivery charges cannot be negative'],
-    default: 0
-  },
-  deliveryChargesApplicable: {
-    type: Boolean,
-    default: true
+    max: [100, 'Discount percentage cannot exceed 100']
   },
   category: {
     type: String,
@@ -89,6 +70,18 @@ const productSchema = new mongoose.Schema({
     color: {
       type: String,
       default: 'Not specified'
+    },
+    sareeType: {
+      type: String,
+      default: 'Not specified'
+    },
+    occasion: {
+      type: String,
+      default: 'Not specified'
+    },
+    pattern: {
+      type: String,
+      default: 'Not specified'
     }
   },
   reviews: [reviewSchema],
@@ -109,16 +102,8 @@ const productSchema = new mongoose.Schema({
     default: Date.now
   }
 }, {
-  collection: 'products', // Explicitly set collection name
-  timestamps: true
+  collection: 'products' // Explicitly set collection name
 });
-
-// Add indexes for better query performance
-productSchema.index({ category: 1, createdAt: -1 });
-productSchema.index({ name: 'text', description: 'text' }); // Text search index
-productSchema.index({ price: 1 });
-productSchema.index({ createdAt: -1 });
-productSchema.index({ isActive: 1 });
 
 // Calculate average rating when a review is added
 productSchema.methods.calculateAverageRating = function() {

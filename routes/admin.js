@@ -232,7 +232,10 @@ router.post('/products', isAdmin, upload.array('images', 5), async (req, res) =>
     // Ensure specifications has required fields
     const finalSpecifications = {
       material: parsedSpecifications.material || 'Not specified',
-      color: parsedSpecifications.color || 'Not specified'
+      color: parsedSpecifications.color || 'Not specified',
+      sareeType: parsedSpecifications.sareeType || 'Not specified',
+      occasion: parsedSpecifications.occasion || 'Not specified',
+      pattern: parsedSpecifications.pattern || 'Not specified'
     };
     
     // Prepare product data
@@ -359,7 +362,10 @@ router.put('/products/:id', isAdmin, upload.array('images', 5), async (req, res)
     // Ensure specifications has required fields
     const finalSpecifications = {
       material: parsedSpecifications.material || product.specifications?.material || 'Not specified',
-      color: parsedSpecifications.color || product.specifications?.color || 'Not specified'
+      color: parsedSpecifications.color || product.specifications?.color || 'Not specified',
+      sareeType: parsedSpecifications.sareeType || product.specifications?.sareeType || 'Not specified',
+      occasion: parsedSpecifications.occasion || product.specifications?.occasion || 'Not specified',
+      pattern: parsedSpecifications.pattern || product.specifications?.pattern || 'Not specified'
     };
     // Update product fields
     if (name) product.name = name;

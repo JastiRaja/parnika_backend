@@ -5,7 +5,6 @@ import { fileURLToPath } from 'url';
 import Product from '../models/Product.js';
 import { auth, adminAuth } from '../middleware/auth.js';
 import fs from 'fs';
-import mongoose from 'mongoose';
 
 const router = express.Router();
 const __filename = fileURLToPath(import.meta.url);
@@ -36,48 +35,22 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage: storage });
 
-// Get all products with pagination and filtering
+// Get all products
 router.get('/', async (req, res) => {
   try {
-    // Check MongoDB connection before querying
-    if (mongoose.connection.readyState !== 1) {
-      const connectionStates = {
-        0: 'disconnected',
-        1: 'connected',
-        2: 'connecting',
-        3: 'disconnecting'
-      };
-      const stateName = connectionStates[mongoose.connection.readyState] || 'unknown';
-      console.error(`MongoDB not connected. Connection state: ${mongoose.connection.readyState} (${stateName})`);
-      return res.status(503).json({ 
-        success: false, 
-        message: 'Database connection unavailable. Please check the server connection and try again.',
-        connectionState: mongoose.connection.readyState,
-        connectionStateName: stateName,
-        hint: 'Check server logs for MongoDB connection errors. Common issues: IP whitelist, incorrect MONGODB_URI, or network problems.'
-      });
-    }
-
-    const { category, sort, search, page = 1, limit = 12, sortBy, sortOrder } = req.query;
+    const { category, sort, search } = req.query;
     let query = {};
 
-    // Build query
-    if (category && category !== 'all') {
+    if (category) {
       query.category = category;
     }
 
     if (search) {
-      query.$or = [
-        { name: { $regex: search, $options: 'i' } },
-        { description: { $regex: search, $options: 'i' } }
-      ];
+      query.name = { $regex: search, $options: 'i' };
     }
 
-    // Build sort options
     let sortOption = {};
-    if (sortBy && sortOrder) {
-      sortOption[sortBy] = sortOrder === 'asc' ? 1 : -1;
-    } else if (sort === 'price_asc') {
+    if (sort === 'price_asc') {
       sortOption = { price: 1 };
     } else if (sort === 'price_desc') {
       sortOption = { price: -1 };
@@ -85,51 +58,32 @@ router.get('/', async (req, res) => {
       sortOption = { createdAt: -1 };
     }
 
-    // Pagination
-    const pageNum = parseInt(page);
-    const limitNum = parseInt(limit);
-    const skip = (pageNum - 1) * limitNum;
-
-    // Execute query with pagination - optimized
-    const queryPromise = Product.find(query)
-      .sort(sortOption)
-      .skip(skip)
-      .limit(limitNum)
-      .select('-__v -reviews') // Exclude reviews to reduce payload size
-      .lean(); // Use lean() for better performance
-    
-    const countPromise = Product.countDocuments(query);
-    
-    // Execute both queries in parallel with timeout protection
-    const [products, total] = await Promise.all([
-      queryPromise,
-      countPromise
-    ]);
-
-    res.json({ 
-      success: true, 
-      products: products || [],
-      total: total || 0,
-      page: pageNum,
-      totalPages: Math.ceil((total || 0) / limitNum)
-    });
+    const products = await Product.find(query).sort(sortOption);
+    // Transform products to include all necessary fields
+    const transformedProducts = products.map(product => ({
+      _id: product._id.toString(),
+      name: product.name,
+      description: product.description,
+      price: product.price,
+      originalPrice: product.originalPrice,
+      discountPercentage: product.discountPercentage,
+      category: product.category,
+      stock: product.stock,
+      images: product.images,
+      specifications: product.specifications || {
+        material: 'Not specified',
+        color: 'Not specified',
+        sareeType: 'Not specified',
+        occasion: 'Not specified',
+        pattern: 'Not specified'
+      },
+      averageRating: product.averageRating || 0,
+      totalReviews: product.totalReviews || 0,
+      createdAt: product.createdAt
+    }));
+    res.json({ success: true, products: transformedProducts });
   } catch (error) {
-    console.error('Error fetching products:', error);
-    
-    // Check if it's a timeout or connection error
-    if ((error.message && error.message.includes('timeout')) || error.name === 'MongoNetworkError' || error.name === 'MongoServerSelectionError') {
-      return res.status(504).json({ 
-        success: false, 
-        message: 'Database connection timeout. Please check your connection and try again.',
-        error: process.env.NODE_ENV === 'development' ? error.message : undefined
-      });
-    }
-    
-    res.status(500).json({ 
-      success: false, 
-      message: 'Error fetching products',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
+    res.status(500).json({ success: false, message: 'Error fetching products' });
   }
 });
 
@@ -141,6 +95,12 @@ router.get('/:id', async (req, res) => {
       return res.status(404).json({ success: false, message: 'Product not found' });
     }
     
+    // Populate reviews with user information
+    await product.populate({
+      path: 'reviews.user',
+      select: 'name email'
+    });
+
     // Convert to plain object and ensure all fields are properly formatted
     const transformedProduct = {
       _id: product._id.toString(),
@@ -149,15 +109,26 @@ router.get('/:id', async (req, res) => {
       price: product.price,
       originalPrice: product.originalPrice,
       discountPercentage: product.discountPercentage,
-      deliveryCharges: product.deliveryCharges,
-      deliveryChargesApplicable: product.deliveryChargesApplicable,
       category: product.category,
       stock: product.stock,
       images: product.images,
       specifications: {
         material: product.specifications?.material || 'Not specified',
-        color: product.specifications?.color || 'Not specified'
+        color: product.specifications?.color || 'Not specified',
+        sareeType: product.specifications?.sareeType || 'Not specified',
+        occasion: product.specifications?.occasion || 'Not specified',
+        pattern: product.specifications?.pattern || 'Not specified'
       },
+      reviews: product.reviews.map((review) => ({
+        _id: review._id.toString(),
+        user: {
+          name: review.user?.name || 'Anonymous',
+          email: review.user?.email
+        },
+        rating: review.rating,
+        comment: review.comment,
+        createdAt: review.createdAt
+      })),
       averageRating: product.averageRating || 0,
       totalReviews: product.totalReviews || 0,
       createdAt: product.createdAt
@@ -174,7 +145,28 @@ router.get('/:id', async (req, res) => {
 router.get('/category/:category', async (req, res) => {
   try {
     const products = await Product.find({ category: req.params.category });
-    res.json({ success: true, products });
+    const transformedProducts = products.map(product => ({
+      _id: product._id.toString(),
+      name: product.name,
+      description: product.description,
+      price: product.price,
+      originalPrice: product.originalPrice,
+      discountPercentage: product.discountPercentage,
+      category: product.category,
+      stock: product.stock,
+      images: product.images,
+      specifications: product.specifications || {
+        material: 'Not specified',
+        color: 'Not specified',
+        sareeType: 'Not specified',
+        occasion: 'Not specified',
+        pattern: 'Not specified'
+      },
+      averageRating: product.averageRating || 0,
+      totalReviews: product.totalReviews || 0,
+      createdAt: product.createdAt
+    }));
+    res.json({ success: true, products: transformedProducts });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Error fetching products' });
   }
@@ -186,7 +178,28 @@ router.get('/search/:query', async (req, res) => {
     const products = await Product.find({
       name: { $regex: req.params.query, $options: 'i' }
     });
-    res.json({ success: true, products });
+    const transformedProducts = products.map(product => ({
+      _id: product._id.toString(),
+      name: product.name,
+      description: product.description,
+      price: product.price,
+      originalPrice: product.originalPrice,
+      discountPercentage: product.discountPercentage,
+      category: product.category,
+      stock: product.stock,
+      images: product.images,
+      specifications: product.specifications || {
+        material: 'Not specified',
+        color: 'Not specified',
+        sareeType: 'Not specified',
+        occasion: 'Not specified',
+        pattern: 'Not specified'
+      },
+      averageRating: product.averageRating || 0,
+      totalReviews: product.totalReviews || 0,
+      createdAt: product.createdAt
+    }));
+    res.json({ success: true, products: transformedProducts });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Error searching products' });
   }

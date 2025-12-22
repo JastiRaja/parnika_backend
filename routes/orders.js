@@ -71,6 +71,7 @@ router.get('/my-orders', verifyToken, async (req, res) => {
 router.get('/:id', verifyToken, async (req, res) => {
   try {
     const order = await Order.findById(req.params.id)
+      .populate('user', 'name email')
       .populate({
         path: 'items.product',
         select: 'name price images specifications'
@@ -81,7 +82,8 @@ router.get('/:id', verifyToken, async (req, res) => {
     }
 
     // Check if user is authorized to view this order
-    if (order.user.toString() !== req.user.id && req.user.role !== 'admin') {
+    const orderUserId = order.user._id ? order.user._id.toString() : order.user.toString();
+    if (orderUserId !== req.user.id && req.user.role !== 'admin') {
       return res.status(403).json({ message: 'Access denied' });
     }
 
