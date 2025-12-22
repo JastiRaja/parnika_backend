@@ -12,6 +12,7 @@ import userRoutes from './routes/users.js';
 import adminRoutes from './routes/admin.js';
 import emailRoutes from './routes/email.js';
 import customerRoutes from './routes/customers.js';
+import slideRoutes from './routes/slides.js';
 
 // Load environment variables
 dotenv.config();
@@ -43,6 +44,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/email', emailRoutes);
 app.use('/api/customers', customerRoutes);
+app.use('/api/slides', slideRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
